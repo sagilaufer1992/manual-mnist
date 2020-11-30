@@ -24,18 +24,25 @@ test_loader = torch.utils.data.DataLoader(dataset=mnist_test,
                                           shuffle=False)
 
 
-# our version to leaky ReLU
-def leaky_relu(mat):
-    zeros = mat - mat
-    positives = torch.maximum(mat, zeros)
-    negatives = torch.minimum(mat * 0.6, zeros)
-    return positives + negatives
+def tanh(t):
+    return torch.tanh(t)
+
+
+def tanhPrime(t):
+    # derivative of tanh
+    # t: tanh output
+    res = 1 - t * t
+    return res
 
 
 # our version to softmax
-def softmax(vector):
+def softmax(vector, dim=None, keepdim=None):
     powered = torch.exp(vector)
-    summed = torch.sum(powered)
+    if dim is not None and keepdim is not None:
+        summed = torch.sum(powered, dim=dim, keepdim=keepdim)
+    else:
+        summed = torch.sum(powered)
+
     return powered / summed
 
 
@@ -55,47 +62,75 @@ def cross_entropy_loss(output, target):
     return res / batch_size
 
 
-class TwoLayers(nn.Module):
-    def __init__(self, input_size, output_size):
-        super(TwoLayers, self).__init__()
-        self.linear1 = nn.Linear(input_size, 100)
-        self.linear2 = nn.Linear(100, output_size)
+class Neural_Network:
+    def __init__(self, input_size=784, output_size=10, hidden_size=100):
+        # parameters
+        self.inputSize = input_size
+        self.outputSize = output_size
+        self.hiddenSize = hidden_size
 
-    def forward(self, x):
-        out1 = self.linear1(x)
-        return self.linear2(leaky_relu(out1))
+        # weights
+        self.W1 = torch.randn(self.inputSize, self.hiddenSize)
+        self.b1 = torch.zeros(self.hiddenSize)
+
+        self.W2 = torch.randn(self.hiddenSize, self.outputSize)
+        self.b2 = torch.zeros(self.outputSize)
+        self.cnt = 0
+
+    def forward(self, X):
+        self.z1 = torch.matmul(X, self.W1) + self.b1
+        self.h = tanh(self.z1)
+        self.z2 = torch.matmul(self.h, self.W2) + self.b2
+        res = softmax(self.z2, 1, True)
+
+        return res
+
+    def backward(self, X, y, y_hat, lr=.5):
+        dl_dz2 = (1 / batch_size) * (y_hat - y)
+        dl_dh = torch.matmul(dl_dz2, torch.t(self.W2))
+        dl_dz1 = dl_dh * tanhPrime(self.h)
+
+        self.W1 -= lr * torch.matmul(torch.t(X), dl_dz1)
+        self.b1 -= lr * torch.matmul(torch.t(dl_dz1), torch.ones(batch_size))
+        self.W2 -= lr * torch.matmul(torch.t(self.h), dl_dz2)
+        self.b2 -= lr * torch.matmul(torch.t(dl_dz2), torch.ones(batch_size))
+
+        # print("back:", time.perf_counter() - t_)
 
 
-model = TwoLayers(input_size, num_classes)
+    def train(self, X, y):
+        # forward + backward pass for training
+        o = self.forward(X)
+        self.backward(X, y, o)
 
-# Loss and Optimizer
-# Softmax is internally computed.
-ce_loss = nn.CrossEntropyLoss()
-optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate, momentum=0.85)
 
-for epoch in range(num_epochs):
-    for i, (images, labels) in enumerate(train_loader):
+def print_loss_to_screen():
+    correct = 0
+    total = 0
+    for images, labels in test_loader:
         images = images.view(-1, 28 * 28)
-        # Forward + Backward + Optimize
-        optimizer.zero_grad()
-        outputs = model(images)
-        loss = cross_entropy_loss(outputs, labels)
-        loss.backward()
-        optimizer.step()
+        out = NN.forward(images)
+        predicted = torch.argmax(out, 1)
 
-        if i % 100 == 0:
-            print('Epoch: [{}/{}], Step: [{}/{}], Loss: {:.4}'.format(epoch + 1, num_epochs,
-                                                                  i + 1, len(mnist_train) // batch_size,
-                                                                  loss.item()))
+        total += labels.size(0)
+        correct += (predicted == labels).sum()
 
-correct = 0
-total = 0
-for images, labels in test_loader:
-    images = images.view(-1, 28 * 28)
-    outputs = model(images)
-    predicted = torch.argmax(outputs, 1)
+    print(f"acc out of : {total}", float(correct) / total)
 
-    total += labels.size(0)
-    correct += (predicted == labels).sum()
 
-print('Accuracy of the model on the 10000 test images: ', float(correct) / total)
+NN = Neural_Network()
+for epoch in range(num_epochs):
+
+    for i, (x, y) in enumerate(train_loader):
+        x = x.view(-1, 784)
+        # turn label to one-hot
+        y_ = torch.zeros(batch_size, num_classes).scatter_(1, y.unsqueeze(1), 1)
+
+        NN.train(x, y_)
+        # if i % 100 == 0:
+        #     y_hat = NN.forward(x)
+        #     print(f"epoch: #{epoch}, step: #{i}, Loss: {cross_entropy_loss(y_hat, y)}")
+
+    print(f"epoch: #{epoch}")
+    print_loss_to_screen()
+
